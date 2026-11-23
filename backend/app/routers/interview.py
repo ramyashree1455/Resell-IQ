@@ -58,6 +58,7 @@ def interview_chat_turn(
         answers=data.answers,
         transcript=data.transcript or "",
         defects=data.defects,
+        item_title=listing.title,
     )
     return chat_result
 

@@ -6,6 +6,7 @@ chat-based Q&A, and cross-checks for contradictions.
 
 from typing import Any, Dict, List, Optional
 from ..grading import get_category_interview, detect_contradictions, calculate_grade
+from .ai_service import AIService
 
 
 FACTOR_SYNONYMS = {
@@ -76,10 +77,45 @@ class InterviewService:
         answers: Dict[str, Any],
         transcript: str = "",
         defects: Optional[List[Dict[str, Any]]] = None,
+        item_title: str = "",
     ) -> Dict[str, Any]:
         """
         Processes one conversational turn of the interview.
+        Uses dynamic LLM when configured, otherwise falls back to deterministic NLP.
         """
+        # Dynamic LLM turn (if Gemini/OpenAI configured)
+        if AIService.is_available() and message:
+            llm_res = AIService.analyze_interview_turn(
+                category=category,
+                item_title=item_title or category,
+                message=message,
+                step=step,
+                answers=answers,
+                transcript=transcript,
+            )
+            if llm_res and "reply" in llm_res:
+                updated_answers = dict(answers or {})
+                if "extracted_factors" in llm_res and isinstance(llm_res["extracted_factors"], dict):
+                    updated_answers.update(llm_res["extracted_factors"])
+
+                new_transcript = f"{transcript}\nA: {message}".strip()
+                contradictions = list(llm_res.get("contradictions") or [])
+                # Also run core heuristic contradiction detector
+                rule_contradictions = detect_contradictions(updated_answers, defects=defects, transcript=new_transcript)
+                for rc in rule_contradictions:
+                    if rc not in contradictions:
+                        contradictions.append(rc)
+
+                return {
+                    "reply": llm_res["reply"],
+                    "next_step": step + 1,
+                    "camera_prompt": llm_res.get("camera_prompt"),
+                    "answers": updated_answers,
+                    "contradictions": contradictions,
+                    "is_complete": bool(llm_res.get("is_complete", len(updated_answers) >= 5)),
+                    "transcript": new_transcript,
+                }
+
         config = cls.get_flow(category)
         questions = config["questions"]
         camera_prompts = config["camera_prompts"]
