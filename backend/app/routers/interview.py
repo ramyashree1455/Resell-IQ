@@ -79,11 +79,13 @@ def submit_interview(
     """
     listing = _get_seller_listing(listing_id, user, db)
 
-    # Run grading engine with contradiction checks
+    # Run dynamic AI grading engine
     grading_output = calculate_grade(
         answers=data.answers,
         defects=data.defects,
         transcript=data.transcript or "",
+        title=listing.title,
+        category=listing.category,
     )
 
     # API contract: Update listing with grade, score and status
