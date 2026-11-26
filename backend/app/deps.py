@@ -14,6 +14,8 @@ def get_current_user(token: str = Depends(oauth2), db: Session = Depends(get_db)
     user = db.get(User, uid) if uid else None
     if not user:
         raise HTTPException(401, "Invalid or expired token")
+    if user.role == "banned":
+        raise HTTPException(403, "This account has been banned")
     return user
 
 

@@ -2,7 +2,7 @@
 Shared by both teammates: change this file only after telling each other."""
 from datetime import datetime
 from sqlalchemy import (Column, Integer, String, Float, Text, DateTime,
-                        ForeignKey, JSON)
+                        ForeignKey, JSON, Boolean, UniqueConstraint)
 from sqlalchemy.orm import relationship
 
 from .database import Base
@@ -11,7 +11,7 @@ from .database import Base
 class User(Base):
     __tablename__ = "users"
     id = Column(Integer, primary_key=True, index=True)
-    role = Column(String(10), default="buyer")  # buyer | seller | admin
+    role = Column(String(10), default="buyer")  # buyer | seller | admin | banned
     name = Column(String(100), nullable=False)
     email = Column(String(255), unique=True, index=True, nullable=False)
     password_hash = Column(String(255), nullable=False)
@@ -59,27 +59,35 @@ class ListingImage(Base):
 
 class CartItem(Base):
     __tablename__ = "cart_items"
+    __table_args__ = (UniqueConstraint("user_id", "listing_id", name="uq_cart_user_listing"),)
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey("users.id"))
     listing_id = Column(Integer, ForeignKey("listings.id"))
+    added_at = Column(DateTime, default=datetime.utcnow)
 
 
 class Order(Base):
     __tablename__ = "orders"
     id = Column(Integer, primary_key=True)
     buyer_id = Column(Integer, ForeignKey("users.id"))
+    seller_id = Column(Integer, ForeignKey("users.id"))
     listing_id = Column(Integer, ForeignKey("listings.id"))
     amount = Column(Float)
     status = Column(String(15), default="placed")  # placed|paid|shipped|delivered|cancelled
+    razorpay_order_id = Column(String(64), index=True, nullable=True)
+    razorpay_payment_id = Column(String(64), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
 class Review(Base):
     __tablename__ = "reviews"
     id = Column(Integer, primary_key=True)
-    order_id = Column(Integer, ForeignKey("orders.id"))
+    order_id = Column(Integer, ForeignKey("orders.id"), unique=True)
+    reviewer_id = Column(Integer, ForeignKey("users.id"))
+    seller_id = Column(Integer, ForeignKey("users.id"), index=True)
     rating = Column(Integer)
     text = Column(Text, default="")
+    created_at = Column(DateTime, default=datetime.utcnow)
 
 
 class Message(Base):
@@ -89,6 +97,7 @@ class Message(Base):
     sender_id = Column(Integer, ForeignKey("users.id"))
     receiver_id = Column(Integer, ForeignKey("users.id"))
     body = Column(Text, nullable=False)
+    is_read = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.utcnow)
 
 

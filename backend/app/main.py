@@ -3,6 +3,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
+from .routers import cart, orders, reviews, messages, admin  # Ramya: marketplace
 from .database import Base, engine
 from . import models  # noqa: F401  (registers tables)
 from .routers import auth, listings
@@ -20,6 +21,12 @@ app.include_router(listings.router)
 # Next routers get added here, one line each:
 #   Ramya : cart, orders, reviews, messages, admin
 #   Friend: interview, grading, price
+
+app.include_router(cart.router)
+app.include_router(orders.router)
+app.include_router(reviews.router)
+app.include_router(messages.router)
+app.include_router(admin.router)
 
 
 @app.get("/", tags=["health"])

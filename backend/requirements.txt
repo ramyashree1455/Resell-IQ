@@ -8,3 +8,5 @@ bcrypt
 python-multipart
 httpx
 pytest
+razorpay
+python-dotenv
