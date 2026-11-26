@@ -37,6 +37,45 @@ def get_interview_questions(category: Optional[str] = Query(default=None)):
     return data
 
 
+@router.post("/chat", response_model=InterviewChatResponse)
+def interview_chat_standalone(
+    data: InterviewChatRequest,
+    category: Optional[str] = Query(default="smartphones"),
+    title: Optional[str] = Query(default=None),
+):
+    """
+    Standalone interactive turn for the AI Seller Interview.
+    Processes the chat turn dynamically using AI based on product category & title.
+    """
+    return InterviewService.process_chat_step(
+        category=category or "smartphones",
+        message=data.message,
+        step=data.step,
+        answers=data.answers,
+        transcript=data.transcript or "",
+        defects=data.defects,
+        item_title=title or category or "Item",
+    )
+
+
+@router.post("/submit", response_model=GradingResultOut)
+def submit_interview_standalone(
+    data: InterviewSubmitRequest,
+    title: Optional[str] = Query(default=None),
+    category: Optional[str] = Query(default="smartphones"),
+):
+    """
+    Standalone submission endpoint calculating condition score & grade dynamically.
+    """
+    return calculate_grade(
+        answers=data.answers,
+        defects=data.defects,
+        transcript=data.transcript or "",
+        title=title or "Item",
+        category=category or "smartphones",
+    )
+
+
 @router.post("/{listing_id}/chat", response_model=InterviewChatResponse)
 def interview_chat_turn(
     listing_id: int,

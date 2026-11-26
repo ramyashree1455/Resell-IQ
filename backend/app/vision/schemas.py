@@ -26,6 +26,8 @@ class ImageAnalysisResult(BaseModel):
     url: Optional[str] = None
     view_type: Optional[str] = "front"
     perceptual_hash: str
+    is_valid_device_photo: bool = True
+    validation_message: Optional[str] = None
     is_duplicate: bool = False
     duplicate_of_image_id: Optional[int] = None
     duplicate_of_listing_id: Optional[int] = None

@@ -1,6 +1,12 @@
 import os
+from pathlib import Path
 
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./resell.db")
+# Absolute path to resell.db so all processes share the exact same database
+BASE_DIR = Path(__file__).resolve().parent.parent
+DB_FILE = BASE_DIR / "resell.db"
+DEFAULT_DB_URL = f"sqlite:///{DB_FILE.as_posix()}"
+
+DATABASE_URL = os.getenv("DATABASE_URL", DEFAULT_DB_URL)
 SECRET_KEY = os.getenv("SECRET_KEY", "dev-secret-change-me")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "120"))

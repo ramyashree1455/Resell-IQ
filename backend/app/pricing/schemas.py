@@ -3,14 +3,16 @@ Pricing Feature Pydantic Schemas.
 """
 
 from datetime import datetime
-from typing import List
+from typing import List, Optional
 from pydantic import BaseModel, Field
 
 
 class PriceEstimateRequest(BaseModel):
-    model_key: str = Field(..., min_length=2, max_length=150, description="e.g. 'iPhone 13 128GB' or 'MacBook Air M1'")
+    model_key: str = Field(..., min_length=2, max_length=500, description="e.g. 'iPhone 13 128GB' or 'MacBook Air M1'")
     grade: str = Field(..., pattern="^[A-Da-d]$", description="Condition grade: A, B, C, or D")
-    asking_price: float = Field(..., gt=0, description="Asking price in dollars")
+    asking_price: float = Field(..., gt=0, description="Asking price in INR or dollars")
+    currency: Optional[str] = Field(None, description="Optional currency: INR or USD")
+    mrp: Optional[float] = Field(None, gt=0, description="Optional original retail M.R.P. from listing")
 
 
 class GradeBenchmark(BaseModel):

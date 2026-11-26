@@ -135,6 +135,8 @@ class DefectDetectionEngine:
         cls,
         image_input: Union[str, bytes, Image.Image],
         view_type: str = "front",
+        product_category: Optional[str] = None,
+        product_title: Optional[str] = None,
     ) -> ImageAnalysisResult:
         if isinstance(image_input, Image.Image):
             img = image_input
@@ -156,96 +158,122 @@ class DefectDetectionEngine:
 
         phash = compute_dhash(img)
 
-        # 1. Check for Gemini Vision if GEMINI_API_KEY is available
+        # 1. Product Relevance Check: Filter out documents and non-device/nature photos
+        is_device, warning_msg = cls._check_device_relevance(
+            img,
+            product_category=product_category,
+            product_title=product_title,
+        )
+        if not is_device:
+            return cls._build_result(
+                phash=phash,
+                defects=[],
+                view_type=view_type,
+                is_valid_device_photo=False,
+                validation_message=warning_msg,
+            )
+
+        # 2. Check for Gemini Vision if GEMINI_API_KEY is available
         gemini_api_key = os.getenv("GEMINI_API_KEY")
         if gemini_api_key and image_bytes:
             ai_defects = cls._analyze_with_gemini_vision(gemini_api_key, image_bytes)
             if ai_defects is not None:
                 return cls._build_result(phash, ai_defects, view_type)
 
-        # 2. Local Computer Vision Defect Analysis (Fast, CPU-based, Zero Cost)
+        # 3. Local Computer Vision Defect Analysis (Fast, CPU-based, Zero Cost)
         local_defects = cls._local_cv_defect_analysis(img, view_type)
         return cls._build_result(phash, local_defects, view_type)
 
     @classmethod
     def _local_cv_defect_analysis(cls, img: Image.Image, view_type: str) -> List[DefectItem]:
+        from PIL import ImageChops
+
         defects: List[DefectItem] = []
 
         if img.mode != "RGB":
             img = img.convert("RGB")
 
+        # Resize large camera photos to a consistent analysis scale so thresholds behave uniformly
+        max_dim = 640
+        if max(img.size) > max_dim:
+            img = img.copy()
+            img.thumbnail((max_dim, max_dim), Image.Resampling.BILINEAR)
+
         w, h = img.size
         gray = img.convert("L")
 
-        # 1. Edge & Scratch Detection via Edge Enhancement & High-Pass Filter
-        # Crop 2-pixel outer boundary to eliminate convolution boundary artifacts
-        edges_raw = gray.filter(ImageFilter.FIND_EDGES)
-        edges = edges_raw.crop((2, 2, max(3, w - 2), max(3, h - 2)))
-        ew, eh = edges.size
-        edge_stat = ImageStat.Stat(edges)
-        edge_mean = edge_stat.mean[0]
-        edge_std = edge_stat.stddev[0]
+        # 1. Top-hat / Median-residual filter to isolate thin scratches & cracks
+        #    while ignoring smooth shadows, finger outlines, bezels, logos, and background gradients.
+        smooth = gray.filter(ImageFilter.MedianFilter(size=9))
+        residual = ImageChops.difference(gray, smooth)
 
-        # 2. Check for high-contrast linear streaks / cracks
+        # Inspect the central device region (avoid outer 18% where hands/tabletops/borders sit)
+        margin_x = int(w * 0.18)
+        margin_y = int(h * 0.18)
+        center_res = residual.crop((margin_x, margin_y, max(margin_x + 10, w - margin_x), max(margin_y + 10, h - margin_y)))
+        cw, ch = center_res.size
+
+        # 2. 3x3 grid anomaly detection on the median residual
         grid_cols = 3
         grid_rows = 3
-        cell_w = ew / grid_cols
-        cell_h = eh / grid_rows
+        cell_w = cw / grid_cols
+        cell_h = ch / grid_rows
 
         for r in range(grid_rows):
             for c in range(grid_cols):
                 box = (int(c * cell_w), int(r * cell_h), int((c + 1) * cell_w), int((r + 1) * cell_h))
-                cell_edges = edges.crop(box)
-                stat = ImageStat.Stat(cell_edges)
+                cell = center_res.crop(box)
+                stat = ImageStat.Stat(cell)
                 cell_mean = stat.mean[0]
                 cell_max = stat.extrema[0][1]
 
-                # Significant edge anomaly indicating crack or deep scratch
-                if cell_max > 150 and cell_mean > 3.0:
-                    severity = "major" if (cell_max > 220 and cell_mean > 8.0) else "moderate"
+                # Require a sharp localized spike significantly above normal surface texture
+                if cell_max >= 130 and cell_mean > 7.5:
+                    severity = "major" if (cell_max >= 165 and cell_mean > 14.0) else "moderate"
                     defect_type = "crack" if severity == "major" else "scratch"
                     desc = f"Surface {defect_type} detected on {view_type} panel"
-                    confidence = min(0.95, round(0.70 + (cell_mean / 255.0) * 0.25, 2))
+                    confidence = min(0.96, round(0.75 + (cell_mean / 128.0) * 0.20, 2))
 
                     defects.append(
                         DefectItem(
                             type=defect_type,
                             severity=severity,
                             location=BoundingBox(
-                                x=round(c / grid_cols, 2),
-                                y=round(r / grid_rows, 2),
-                                width=round(1.0 / grid_cols, 2),
-                                height=round(1.0 / grid_rows, 2),
+                                x=round(0.18 + (c / grid_cols) * 0.64, 2),
+                                y=round(0.18 + (r / grid_rows) * 0.64, 2),
+                                width=round(0.64 / grid_cols, 2),
+                                height=round(0.64 / grid_rows, 2),
                             ),
                             description=desc,
                             confidence=confidence,
                         )
                     )
 
-        # 3. Corner / Edge Dent Inspection
+        # 3. Corner Dent Inspection using high-frequency residual + extreme variance
         corner_boxes = [
-            ("top_left", (0, 0, int(w * 0.2), int(h * 0.2)), 0.0, 0.0),
-            ("top_right", (int(w * 0.8), 0, w, int(h * 0.2)), 0.8, 0.0),
-            ("bottom_left", (0, int(h * 0.8), int(w * 0.2), h), 0.0, 0.8),
-            ("bottom_right", (int(w * 0.8), int(h * 0.8), w, h), 0.8, 0.8),
+            ("top_left", (0, 0, int(w * 0.18), int(h * 0.18)), 0.0, 0.0),
+            ("top_right", (int(w * 0.82), 0, w, int(h * 0.18)), 0.82, 0.0),
+            ("bottom_left", (0, int(h * 0.82), int(w * 0.18), h), 0.0, 0.82),
+            ("bottom_right", (int(w * 0.82), int(h * 0.82), w, h), 0.82, 0.82),
         ]
 
         for corner_name, bbox, nx, ny in corner_boxes:
-            corner_crop = gray.crop(bbox)
-            stat = ImageStat.Stat(corner_crop)
-            corner_std = stat.stddev[0]
-            if corner_std > 48.0:
+            corner_res = residual.crop(bbox)
+            corner_gray = gray.crop(bbox)
+            res_mean = ImageStat.Stat(corner_res).mean[0]
+            corner_std = ImageStat.Stat(corner_gray).stddev[0]
+            if res_mean > 18.0 and corner_std > 110.0:
                 defects.append(
                     DefectItem(
                         type="dent",
-                        severity="minor" if corner_std < 65 else "moderate",
-                        location=BoundingBox(x=nx, y=ny, width=0.2, height=0.2),
-                        description=f"Corner impact dent/chip identified on {corner_name.replace('_', ' ')}",
+                        severity="minor" if res_mean < 25.0 else "moderate",
+                        location=BoundingBox(x=nx, y=ny, width=0.18, height=0.18),
+                        description=f"Corner impact dent identified on {corner_name.replace('_', ' ')}",
                         confidence=0.82,
                     )
                 )
 
-        return defects[:5]
+        return defects
 
     @classmethod
     def _synthetic_defects_from_hint(cls, hint: str) -> List[DefectItem]:
@@ -338,14 +366,69 @@ class DefectDetectionEngine:
         return None
 
     @classmethod
+    def _check_device_relevance(
+        cls,
+        img: Image.Image,
+        product_category: Optional[str] = None,
+        product_title: Optional[str] = None,
+    ) -> Tuple[bool, Optional[str]]:
+        if img.mode != "RGB":
+            img = img.convert("RGB")
+        w, h = img.size
+        if w < 10 or h < 10:
+            return True, None
+
+        rejection_msg = "Invalid image. The uploaded photo does not appear to contain the selected product. Please upload a clear photograph of your device."
+
+        # 1. Document / Diagram / Text Screenshot Check
+        gray = img.convert("L")
+        stat = ImageStat.Stat(gray)
+        mean_brightness = stat.mean[0]
+        hist = gray.histogram()
+        white_pixels = sum(hist[240:])
+        white_ratio = white_pixels / (w * h)
+        if white_ratio > 0.55 and mean_brightness > 180 and stat.stddev[0] > 15:
+            return False, rejection_msg
+
+        # 2. Wildlife / Peacock / Landscape / Vibrant nature scene
+        # Devices (even held in hand or on desk) have low overall chroma and darker tones,
+        # whereas natural wildlife/peacocks/scenery have bright multi-hue chroma.
+        small = img.resize((100, 100))
+        pixels = list(small.getdata())
+        chromas = [max(p[0], p[1], p[2]) - min(p[0], p[1], p[2]) for p in pixels]
+        vibrant_ratio = sum(1 for c in chromas if c > 60) / len(chromas)
+
+        hsv = small.convert("HSV")
+        h_chan, _, v_chan = hsv.split()
+        val_mean = ImageStat.Stat(v_chan).mean[0]
+
+        h_hist = h_chan.histogram()
+        bin_count = 12
+        bin_size = 256 // bin_count
+        bins = [0] * bin_count
+        for i in range(256):
+            b = min(bin_count - 1, i // bin_size)
+            bins[b] += h_hist[i]
+
+        significant_hue_bins = sum(1 for count in bins if count > (100 * 100 * 0.05))
+
+        # Peacock, landscapes, birds have multiple vibrant color bands AND high brightness
+        if significant_hue_bins >= 3 and vibrant_ratio > 0.30 and val_mean > 85.0:
+            return False, rejection_msg
+
+        return True, None
+
+    @classmethod
     def _build_result(
         cls,
         phash: str,
         defects: List[DefectItem],
         view_type: str,
+        is_valid_device_photo: bool = True,
+        validation_message: Optional[str] = None,
     ) -> ImageAnalysisResult:
         defect_count = len(defects)
-        is_clean = defect_count == 0
+        is_clean = defect_count == 0 and is_valid_device_photo
 
         severities = [d.severity for d in defects]
         if "major" in severities:
@@ -357,14 +440,19 @@ class DefectDetectionEngine:
         else:
             overall_severity = "none"
 
-        if is_clean:
-            summary = f"No visible cosmetic or structural defects found on {view_type} view."
+        if not is_valid_device_photo:
+            summary = validation_message or "Non-device photo detected. Please upload an actual device photo."
+            is_clean = False
+        elif is_clean:
+            summary = "No visible defects detected."
         else:
             defect_types = ", ".join(set(d.type for d in defects))
             summary = f"Identified {defect_count} defect(s) ({defect_types}) on {view_type} view with {overall_severity} severity."
 
         return ImageAnalysisResult(
             perceptual_hash=phash,
+            is_valid_device_photo=is_valid_device_photo,
+            validation_message=validation_message,
             is_duplicate=False,
             similarity_score=0.0,
             defects=defects,

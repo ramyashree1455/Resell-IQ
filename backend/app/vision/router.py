@@ -39,7 +39,7 @@ def analyze_listing_vision_endpoint(
 
 
 @router.post("/check-duplicate", response_model=DuplicateCheckResponse)
-async def check_duplicate_endpoint(
+def check_duplicate_endpoint(
     file: Optional[UploadFile] = File(None),
     image_hash: Optional[str] = Form(None),
     exclude_listing_id: Optional[int] = Form(None),
@@ -50,7 +50,7 @@ async def check_duplicate_endpoint(
     to detect duplicate or stolen photos.
     """
     if file:
-        content = await file.read()
+        content = file.file.read()
         return VisionService.check_duplicate(db=db, image_input=content, exclude_listing_id=exclude_listing_id)
     elif image_hash:
         return VisionService.check_duplicate(db=db, image_input=image_hash, exclude_listing_id=exclude_listing_id)
@@ -59,16 +59,23 @@ async def check_duplicate_endpoint(
 
 
 @router.post("/detect-defects", response_model=ImageAnalysisResult)
-async def detect_defects_endpoint(
+def detect_defects_endpoint(
     file: UploadFile = File(...),
     view_type: str = Form("front"),
+    product_category: Optional[str] = Form(None),
+    product_title: Optional[str] = Form(None),
 ):
     """
     Directly inspects an uploaded image for physical defects (scratches, cracks, dents)
-    and computes its perceptual hash.
+    and computes its perceptual hash. Validates that the image matches the selected product.
     """
-    content = await file.read()
+    content = file.file.read()
     try:
-        return DefectDetectionEngine.analyze_image(content, view_type=view_type)
+        return DefectDetectionEngine.analyze_image(
+            content,
+            view_type=view_type,
+            product_category=product_category,
+            product_title=product_title,
+        )
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Image inspection failed: {str(e)}")

@@ -22,9 +22,11 @@ router = APIRouter(prefix="/price", tags=["pricing"])
 
 @router.get("/estimate", response_model=PriceEstimateResponse)
 def estimate_price_get(
-    model_key: str = Query(..., min_length=2, max_length=150, description="e.g. 'iPhone 13'"),
+    model_key: str = Query(..., min_length=2, max_length=500, description="e.g. 'iPhone 13'"),
     grade: str = Query(..., pattern="^[A-Da-d]$", description="Grade A, B, C, or D"),
-    asking_price: float = Query(..., gt=0, description="Asking price in dollars"),
+    asking_price: float = Query(..., gt=0, description="Asking price"),
+    currency: Optional[str] = Query(None, description="Currency (INR or USD)"),
+    mrp: Optional[float] = Query(None, gt=0, description="Optional original retail M.R.P."),
     db: Session = Depends(get_db),
 ):
     """
@@ -38,6 +40,8 @@ def estimate_price_get(
             grade=grade,
             asking_price=asking_price,
             db=db,
+            currency=currency,
+            mrp=mrp,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -57,6 +61,8 @@ def estimate_price_post(
             grade=req.grade,
             asking_price=req.asking_price,
             db=db,
+            currency=req.currency,
+            mrp=req.mrp,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
